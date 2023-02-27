@@ -31,6 +31,8 @@ export type Field = Readable<{
   subscribeValue: Readable<string>['subscribe'],
   setErrors: (error: string[] | undefined) => void,
   setDirty: () => void,
+  setValue: (value: string) => void,
+  reset: () => void,
   readonly dirty: boolean,
   readonly options: FieldOptionsParsed,
 };
@@ -51,9 +53,14 @@ export function field(opts: FieldOptions): Field {
     if (!dirty) registerEvent('input', handleEvent);
     dirty = true;
   }
+  function setValue(v: string) {
+    value.set(v);
+    if (node) node.value = v;
+  }
 
   let node: HTMLInputElement;
   function registerEvent(event: string, fn: (e: Event) => void) {
+    if (!node) return;
     node.addEventListener(event, fn);
     listeners.set(event, fn);
   }
@@ -63,7 +70,6 @@ export function field(opts: FieldOptions): Field {
     value.set(target.value);
   }
 
-
   return {
     ...derived([value, errors], ([$value, $errors]) => ({
       value: $value,
@@ -72,7 +78,14 @@ export function field(opts: FieldOptions): Field {
     })),
     get dirty() { return dirty; },
     setDirty,
+    setValue,
     options,
+    reset: () => {
+      if (node) node.value = options.initialValue ?? '';
+      dirty = false;
+      const onInput = listeners.get('input');
+      if (onInput) node.removeEventListener('input', onInput);
+    },
     subscribeValue: value.subscribe,
     setErrors: err => errors.set(err),
     action: n => {
@@ -103,11 +116,18 @@ export function field(opts: FieldOptions): Field {
 }
 
 type Fields = { [key: string]: Field };
-type FormErrors<T extends Fields> = { [k in keyof T]?: string[] };
+type FormErrors<F extends Fields> = { [k in keyof F]?: string[] };
+interface ServerValidationResult<T extends Fields> {
+  errors: FormErrors<T>,
+  anyError: boolean,
+  values: Partial<{ [key in keyof T]: string }>,
+}
 export interface Form<F extends Fields> {
   errors: Readable<FormErrors<F>>;
   anyError: Readable<boolean>;
   enhancer: SubmitFunction;
+  populate: (validation: ServerValidationResult<F>) => void;
+  reset: () => void;
 }
 
 export async function createForm<T extends Fields>(fields: T): Promise<Form<T>> {
@@ -143,17 +163,31 @@ export async function createForm<T extends Fields>(fields: T): Promise<Form<T>> 
         if (field.options.mode === 'onSubmit' || field.options.mode === 'all') field.setDirty();
       });
       await validateAll();
-      // if (get(anyError)) cancel();
+      if (get(anyError)) cancel();
       return ({ update }) => update();
     },
+    populate(validation) {
+      Object.entries(validation.errors).forEach(([key, errs]) => {
+        const field = fields[key];
+        if (!field) return;
+        field.setErrors(errs);
+        field.setDirty();
+      });
+      Object.entries(validation.values).forEach(([key, value]) => {
+        const field = fields[key];
+        if (!field) return;
+        field.setValue(value as string);
+      });
+      errors.set(validation.errors);
+    },
+    reset() {
+      Object.values(fields).forEach(field => field.reset());
+      errors.set({});
+    }
   };
 }
 
-export async function validateFormData<T extends Fields>(fields: T, data: FormData): Promise<{
-  errors: FormErrors<T>,
-  anyError: boolean,
-  values: Partial<{ [key in keyof T]: string }>,
-}> {
+export async function validateFormData<T extends Fields>(fields: T, data: FormData): Promise<ServerValidationResult<T>> {
   let anyError = false;
   const values: Partial<{ [key in keyof T]: string }> = {};
   const res = await Promise.all(Object.entries(fields).map(async ([key, field]) => {
