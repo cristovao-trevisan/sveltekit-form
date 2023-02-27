@@ -1,4 +1,5 @@
 import type { MaybePromise, SubmitFunction } from '$app/forms';
+import { fail, type Action as KitAction } from '@sveltejs/kit';
 import type { Action } from 'svelte/action';
 import { derived, get, writable, type Readable } from 'svelte/store';
 
@@ -203,4 +204,15 @@ export async function validateFormData<T extends Fields>(fields: T, data: FormDa
     return { ...acc, [key]: errs.length ? errs : null };
   }, {});
   return { errors, values, anyError };
+}
+
+export type Submit<F extends Fields> = (value: ServerValidationResult<F>) => void;
+export function validate<F extends Fields>(fields: F, submit: Submit<F>): KitAction {
+  return async ({ request }) => {
+    const data = await request.formData();
+    const validation = await validateFormData(fields, data);
+    if (validation.anyError) return fail(400, validation as any);
+    await submit(validation);
+    return { success: true };
+  }
 }
