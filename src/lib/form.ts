@@ -1,5 +1,5 @@
 import type { MaybePromise, SubmitFunction } from '$app/forms';
-import { fail, type Action as KitAction } from '@sveltejs/kit';
+import { fail, type Action as KitAction, type AwaitedActions } from '@sveltejs/kit';
 import type { Action } from 'svelte/action';
 import { derived, get, writable, type Readable } from 'svelte/store';
 
@@ -29,13 +29,13 @@ export type Field = Readable<{
   error?: string;
 }> & {
   action: Action<HTMLInputElement>,
-  subscribeValue: Readable<string>['subscribe'],
-  setErrors: (error: string[] | undefined) => void,
-  setDirty: () => void,
-  setValue: (value: string) => void,
-  reset: () => void,
-  readonly dirty: boolean,
-  readonly options: FieldOptionsParsed,
+  /** @internal */ subscribeValue: Readable<string>['subscribe'],
+  /** @internal */ setErrors: (error: string[] | undefined) => void,
+  /** @internal */ setDirty: () => void,
+  /** @internal */ setValue: (value: string) => void,
+  /** @internal */ reset: () => void,
+  /** @internal */ readonly dirty: boolean,
+  /** @internal */ readonly options: FieldOptionsParsed,
 };
 
 
@@ -129,10 +129,11 @@ export interface Form<F extends Fields> {
   enhancer: SubmitFunction;
   populate: (validation: ServerValidationResult<F>) => void;
   reset: () => void;
+  actionData: (ActionData: AwaitedActions<any>) => void;
 }
 
-export async function createForm<T extends Fields>(fields: T): Promise<Form<T>> {
-  const errors = writable<FormErrors<T>>({});
+export async function createForm<F extends Fields>(fields: F): Promise<Form<F>> {
+  const errors = writable<FormErrors<F>>({});
   const anyError = derived(errors, $errors => Object.values($errors).some(Boolean));
   
   Object.entries(fields).forEach(([key, field]) => {
@@ -156,9 +157,30 @@ export async function createForm<T extends Fields>(fields: T): Promise<Form<T>> 
     await Promise.all(Object.entries(fields).map(([key, field]) => validateField(key, field, get(field).value)));
   }
 
+  function populate(validation: ServerValidationResult<F>) {
+    Object.entries(validation.errors).forEach(([key, errs]) => {
+      const field = fields[key];
+      if (!field) return;
+      field.setErrors(errs);
+      field.setDirty();
+    });
+    Object.entries(validation.values).forEach(([key, value]) => {
+      const field = fields[key];
+      if (!field) return;
+      field.setValue(value as string);
+    });
+    errors.set(validation.errors);
+  }
+  function reset() {
+    Object.values(fields).forEach(field => field.reset());
+    errors.set({});
+  }
+
   return {
     errors,
     anyError,
+    populate,
+    reset,
     async enhancer({ cancel }) {
       Object.values(fields).forEach(field => {
         if (field.options.mode === 'onSubmit' || field.options.mode === 'all') field.setDirty();
@@ -167,28 +189,17 @@ export async function createForm<T extends Fields>(fields: T): Promise<Form<T>> 
       if (get(anyError)) cancel();
       return ({ update }) => update();
     },
-    populate(validation) {
-      Object.entries(validation.errors).forEach(([key, errs]) => {
-        const field = fields[key];
-        if (!field) return;
-        field.setErrors(errs);
-        field.setDirty();
-      });
-      Object.entries(validation.values).forEach(([key, value]) => {
-        const field = fields[key];
-        if (!field) return;
-        field.setValue(value as string);
-      });
-      errors.set(validation.errors);
+    actionData(form) {
+      const f = form as any;
+      if (f) {
+        if (f.success) reset();
+        else populate(f);
+      }
     },
-    reset() {
-      Object.values(fields).forEach(field => field.reset());
-      errors.set({});
-    }
   };
 }
 
-export async function validateFormData<T extends Fields>(fields: T, data: FormData): Promise<ServerValidationResult<T>> {
+async function validateFormData<T extends Fields>(fields: T, data: FormData): Promise<ServerValidationResult<T>> {
   let anyError = false;
   const values: Partial<{ [key in keyof T]: string }> = {};
   const res = await Promise.all(Object.entries(fields).map(async ([key, field]) => {

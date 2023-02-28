@@ -4,12 +4,9 @@
 
   export let form: ActionData;
   export let data: PageData;
-  const { name, age, study, enhancer, anyError, reset, populate } = data;
-  
-  $: if (form) {
-    if (form.success) reset();
-    else populate(form as any);
-  }
+  const { name, age, study, enhancer, anyError, actionData } = data;
+
+  $: actionData(form);
 </script>
 
 <form use:enhance={enhancer} method="POST">
