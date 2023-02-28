@@ -3,49 +3,49 @@ import type { MaybePromise } from '@sveltejs/kit/types/private';
 import { derived, get, writable, type Readable } from 'svelte/store';
 import { fail, type Action as KitAction, type AwaitedActions, type SubmitFunction } from '@sveltejs/kit';
 
-// TODO: files
+type Value = string | File;
 
 /**
  * Validator returns the error string or nothing if valid
  * To use multiple validators, use the `combine` function
  */
-export type Validator = (value: string) => MaybePromise<string | void>;
+export type Validator<T extends Value = any> = (value: T) => MaybePromise<string | void>;
 
 export type FieldMode = 'onBlur' | 'onChange' | 'onSubmit' | 'all';
-export interface FieldOptions {
+export interface FieldOptions<V extends Value> {
   mode: FieldMode;
   multipleErrors?: boolean;
-  validators?: Validator[],
-  initialValue?: string | number,
+  validators?: Validator<V>[],
+  initialValue?: string,
 }
-interface FieldOptionsParsed extends FieldOptions {
+interface FieldOptionsParsed<V extends Value> extends FieldOptions<V> {
   validators: Validator[],
-  initialValue: string | undefined,
 }
 
-export type Field = Readable<{
-  value: string;
+export type Field<V extends Value> = Readable<{
+  value: V;
   errors?: string[];
   error?: string;
 }> & {
   action: Action<HTMLInputElement>,
-  /** @internal */ subscribeValue: Readable<string>['subscribe'],
+  /** @internal */ subscribeValue: Readable<Value>['subscribe'],
   /** @internal */ setErrors: (error: string[] | undefined) => void,
   /** @internal */ setDirty: () => void,
-  /** @internal */ setValue: (value: string) => void,
+  /** @internal */ setValue: (value: V) => void,
+  /** @internal */ readValue: () => void,
   /** @internal */ reset: () => void,
   /** @internal */ readonly dirty: boolean,
-  /** @internal */ readonly options: FieldOptionsParsed,
+  /** @internal */ readonly options: FieldOptionsParsed<V>,
+  /** @internal */ T?: V,
 };
 
 
-export function field(opts: FieldOptions): Field {
-  const options: FieldOptionsParsed = {
+export function field<V extends Value>(opts: FieldOptions<V>): Field<V> {
+  const options: FieldOptionsParsed<V> = {
     validators: [],
     ...opts,
-    initialValue: opts.initialValue === undefined ? undefined : String(opts.initialValue)
   };
-  const value = writable(options.initialValue);
+  const value = writable<V>(options.initialValue as V ?? '');
   const errors = writable<string[] | undefined>(undefined);
   const listeners = new Map<string, (e: Event) => void>();
   let dirty = false;
@@ -54,9 +54,14 @@ export function field(opts: FieldOptions): Field {
     if (!dirty) registerEvent('input', handleEvent);
     dirty = true;
   }
-  function setValue(v: string) {
+  function setValue(v: V) {
     value.set(v);
-    if (node) node.value = v;
+    if (node && typeof v === 'string') node.value = v;
+  }
+  function readValue() {
+    if (!node) return;
+    const v = node.files?.[0] ?? node.value;
+    value.set(v as V);
   }
 
   let node: HTMLInputElement;
@@ -68,7 +73,8 @@ export function field(opts: FieldOptions): Field {
   function handleEvent(e: Event) {
     const target = e.target as HTMLInputElement;
     setDirty();
-    value.set(target.value);
+    const v = target.files?.[0] ?? target.value;
+    value.set(v as V);
   }
 
   return {
@@ -80,9 +86,13 @@ export function field(opts: FieldOptions): Field {
     get dirty() { return dirty; },
     setDirty,
     setValue,
+    readValue,
     options,
     reset: () => {
-      if (node) node.value = options.initialValue ?? '';
+      if (node) {
+        if (typeof options.initialValue === 'string') node.value = options.initialValue ?? '';
+        else node.value = '';
+      }
       dirty = false;
       const onInput = listeners.get('input');
       if (onInput) node.removeEventListener('input', onInput);
@@ -91,7 +101,7 @@ export function field(opts: FieldOptions): Field {
     setErrors: err => errors.set(err),
     action: n => {
       node = n;
-      node.value = options.initialValue ?? '';
+      if (node && typeof options.initialValue === 'string') node.value = options.initialValue ?? '';
 
       switch (options.mode) {
         case 'onBlur':
@@ -100,13 +110,9 @@ export function field(opts: FieldOptions): Field {
         case 'onChange':
           registerEvent('change', handleEvent);
           break;
-        case 'onSubmit':
-          registerEvent('submit', handleEvent);
-          break;
         case 'all':
           registerEvent('blur', handleEvent);
           registerEvent('change', handleEvent);
-          registerEvent('submit', handleEvent);
           break;
       }
       return {
@@ -116,12 +122,12 @@ export function field(opts: FieldOptions): Field {
   };
 }
 
-interface Fields { [key: string]: Field }
+interface Fields { [key: string]: Field<any> }
 type FormErrors<F extends Fields> = { [k in keyof F]?: string[] };
-interface ServerValidationResult<T extends Fields> {
-  errors: FormErrors<T>,
+interface ServerValidationResult<F extends Fields> {
+  errors: FormErrors<F>,
   anyError: boolean,
-  values: Partial<{ [key in keyof T]: string }>,
+  values: { [k in keyof F]: F[k]['T'] },
 }
 export interface Form<F extends Fields> {
   errors: Readable<FormErrors<F>>;
@@ -135,13 +141,13 @@ export interface Form<F extends Fields> {
 export async function createForm<F extends Fields>(fields: F): Promise<Form<F>> {
   const errors = writable<FormErrors<F>>({});
   const anyError = derived(errors, $errors => Object.values($errors).some(Boolean));
-  
+
   Object.entries(fields).forEach(([key, field]) => {
     field.subscribeValue(v => {
       if (field.dirty) validateField(key, field, v);
     });
   });
-  async function validateField(key: string, field: Field, value: string) {
+  async function validateField(key: string, field: Field<any>, value: Value) {
     const errs = [] as string[];
     for (const validator of field.options.validators) {
       const error = await validator(value);
@@ -183,7 +189,10 @@ export async function createForm<F extends Fields>(fields: F): Promise<Form<F>> 
     reset,
     async enhancer({ cancel }) {
       Object.values(fields).forEach(field => {
-        if (field.options.mode === 'onSubmit' || field.options.mode === 'all') field.setDirty();
+        if (field.options.mode === 'onSubmit' || field.options.mode === 'all') {
+          field.setDirty();
+          field.readValue();
+        }
       });
       await validateAll();
       if (get(anyError)) cancel();
@@ -199,14 +208,13 @@ export async function createForm<F extends Fields>(fields: F): Promise<Form<F>> 
   };
 }
 
-async function validateFormData<T extends Fields>(fields: T, data: FormData): Promise<ServerValidationResult<T>> {
+async function validateFormData<F extends Fields>(fields: F, data: FormData): Promise<ServerValidationResult<F>> {
   let anyError = false;
-  const values: Partial<{ [key in keyof T]: string }> = {};
+  const values = {} as any;
   const res = await Promise.all(Object.entries(fields).map(async ([key, field]) => {
-    const value = data.get(key)?.toString() ?? '';
-    const k = key as keyof T;
-    values[k] = value;
-    return Promise.all(field.options.validators.map(validator => validator(String(value))));
+    const value = data.get(key);
+    values[key] = value;
+    return Promise.all(field.options.validators.map(validator => validator(value)));
   }));
   const errors = res.reduce((acc, cur, i) => {
     const key = Object.keys(fields)[i];

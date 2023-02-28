@@ -4,11 +4,11 @@
 
   export let form: ActionData;
   export let data: PageData;
-  const { name, age, study, enhancer, anyError, actionData } = data;
+  const { name, age, study, picture, enhancer, anyError, actionData } = data;
 
   $: actionData(form);
 </script>
-
+<!-- TODO: prettify -->
 <form use:enhance={enhancer} method="POST">
   <label class:error={$name.error}>
     Name
@@ -21,6 +21,10 @@
   <label class:error={$study.error}>
     Study
     <input type="text" name="study" use:study.action value={$study.value}>
+  </label>
+  <label class:error={$picture.error}>
+    Study
+    <input type="file" name="picture" use:picture.action>
   </label>
   <button class:error={$anyError}> Submit </button>
 </form>

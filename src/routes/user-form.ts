@@ -1,15 +1,16 @@
 import { createForm, field } from '$lib';
-import { required } from '$lib/validators';
+import { required, requiredFile } from '$lib/validators';
 
 export function fields() {
   const name = field({ mode: 'onSubmit', validators: [required] });
   const age = field({ mode: 'onBlur', validators: [required] });
   const study = field({ initialValue: 'Eng.', mode: 'onSubmit', validators: [required] });
-  return { name, age, study };
+  const picture = field({ mode: 'onChange', validators: [requiredFile] });
+  return { name, age, study, picture };
 }
 
 export async function form() {
-  const _fields = fields();
-  const form = await createForm(_fields);
-  return { ..._fields, ...form };
+  const ff = fields();
+  const form = await createForm(ff);
+  return { ...ff, ...form };
 }
