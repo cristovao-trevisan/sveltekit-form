@@ -21,6 +21,7 @@
 		"dist"
 	],
 	"peerDependencies": {
+		"@sveltejs/kit": "^1.5.0",
 		"svelte": "^3.54.0"
 	},
 	"devDependencies": {

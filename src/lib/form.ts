@@ -1,7 +1,7 @@
-import type { MaybePromise, SubmitFunction } from '$app/forms';
-import { fail, type Action as KitAction, type AwaitedActions } from '@sveltejs/kit';
 import type { Action } from 'svelte/action';
+import type { MaybePromise } from '@sveltejs/kit/types/private';
 import { derived, get, writable, type Readable } from 'svelte/store';
+import { fail, type Action as KitAction, type AwaitedActions, type SubmitFunction } from '@sveltejs/kit';
 
 // TODO: files
 
@@ -116,7 +116,7 @@ export function field(opts: FieldOptions): Field {
   };
 }
 
-type Fields = { [key: string]: Field };
+interface Fields { [key: string]: Field }
 type FormErrors<F extends Fields> = { [k in keyof F]?: string[] };
 interface ServerValidationResult<T extends Fields> {
   errors: FormErrors<T>,
