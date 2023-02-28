@@ -1,4 +1,4 @@
-import { createForm, field } from '$lib/form';
+import { createForm, field } from '$lib';
 import { required } from '$lib/validators';
 
 export function fields() {
