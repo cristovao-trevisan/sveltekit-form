@@ -38,5 +38,8 @@
 	},
 	"svelte": "./dist/index.js",
 	"types": "./dist/index.d.ts",
-	"type": "module"
+	"type": "module",
+	"dependencies": {
+		"rollup-plugin-visualizer": "^5.9.0"
+	}
 }
