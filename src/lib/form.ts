@@ -13,7 +13,7 @@ export type Validator<T extends Value = any> = (value: T) => MaybePromise<string
 
 export type FieldMode = 'onBlur' | 'onChange' | 'onSubmit' | 'all';
 export interface FieldOptions<V extends Value> {
-  mode: FieldMode;
+  mode: V extends File ? 'onChange' : FieldMode;
   multipleErrors?: boolean;
   validators?: Validator<V>[],
   initialValue?: string,
@@ -24,17 +24,17 @@ interface FieldOptionsParsed<V extends Value> extends FieldOptions<V> {
 
 export type Field<V extends Value> = Readable<{
   value: V;
+  dirty: boolean;
   errors?: string[];
   error?: string;
 }> & {
   action: Action<HTMLInputElement>,
-  /** @internal */ subscribeValue: Readable<Value>['subscribe'],
+  /** @internal */ subscribeValue: Readable<readonly [V, boolean]>['subscribe'],
   /** @internal */ setErrors: (error: string[] | undefined) => void,
   /** @internal */ setDirty: () => void,
   /** @internal */ setValue: (value: V) => void,
   /** @internal */ readValue: () => void,
   /** @internal */ reset: () => void,
-  /** @internal */ readonly dirty: boolean,
   /** @internal */ readonly options: FieldOptionsParsed<V>,
   /** @internal */ T?: V,
 };
@@ -48,11 +48,14 @@ export function field<V extends Value>(opts: FieldOptions<V>): Field<V> {
   const value = writable<V>(options.initialValue as V ?? '');
   const errors = writable<string[] | undefined>(undefined);
   const listeners = new Map<string, (e: Event) => void>();
-  let dirty = false;
+  const dirty = writable(false);
+  let alreadyDirty = false;
 
   function setDirty() {
-    if (!dirty) registerEvent('input', handleEvent);
-    dirty = true;
+    if (alreadyDirty) return;
+    alreadyDirty = true;
+    dirty.set(true);
+    registerEvent('input', handleEvent);
   }
   function setValue(v: V) {
     value.set(v);
@@ -78,12 +81,7 @@ export function field<V extends Value>(opts: FieldOptions<V>): Field<V> {
   }
 
   return {
-    ...derived([value, errors], ([$value, $errors]) => ({
-      value: $value,
-      errors: $errors,
-      error: $errors && $errors[0],
-    })),
-    get dirty() { return dirty; },
+    ...derived([value, errors, dirty], ([value, errors, dirty]) => ({ value, errors, dirty, error: errors && errors[0] })),
     setDirty,
     setValue,
     readValue,
@@ -93,11 +91,12 @@ export function field<V extends Value>(opts: FieldOptions<V>): Field<V> {
         if (typeof options.initialValue === 'string') node.value = options.initialValue ?? '';
         else node.value = '';
       }
-      dirty = false;
+      alreadyDirty = false;
+      dirty.set(false);
       const onInput = listeners.get('input');
       if (onInput) node.removeEventListener('input', onInput);
     },
-    subscribeValue: value.subscribe,
+    subscribeValue: derived([value, dirty], ([$value, $dirty]) => [$value, $dirty] as const).subscribe,
     setErrors: err => errors.set(err),
     action: n => {
       node = n;
@@ -143,8 +142,8 @@ export async function createForm<F extends Fields>(fields: F): Promise<Form<F>> 
   const anyError = derived(errors, $errors => Object.values($errors).some(Boolean));
 
   Object.entries(fields).forEach(([key, field]) => {
-    field.subscribeValue(v => {
-      if (field.dirty) validateField(key, field, v);
+    field.subscribeValue(([v, dirty]) => {
+      if (dirty) validateField(key, field, v);
     });
   });
   async function validateField(key: string, field: Field<any>, value: Value) {
