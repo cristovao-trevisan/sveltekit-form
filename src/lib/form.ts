@@ -3,7 +3,7 @@ import type { MaybePromise } from '@sveltejs/kit/types/private';
 import { derived, get, writable, type Readable } from 'svelte/store';
 import { fail, type Action as KitAction, type AwaitedActions, type SubmitFunction } from '@sveltejs/kit';
 
-type Value = string | File;
+type Value = string | File[];
 
 /**
  * Validator returns the error string or nothing if valid
@@ -13,7 +13,7 @@ export type Validator<T extends Value = any> = (value: T) => MaybePromise<string
 
 export type FieldMode = 'onBlur' | 'onChange' | 'onSubmit' | 'all';
 export interface FieldOptions<V extends Value> {
-  mode: V extends File ? 'onChange' : FieldMode;
+  mode: V extends File[] ? 'onChange' : FieldMode;
   multipleErrors?: boolean;
   validators?: Validator<V>[],
   initialValue?: string,
@@ -63,8 +63,8 @@ export function field<V extends Value>(opts: FieldOptions<V>): Field<V> {
   }
   function readValue() {
     if (!node) return;
-    const v = node.files?.[0] ?? node.value;
-    value.set(v as V);
+    if (node.files) value.set([...node.files] as V);
+    else value.set(node.value as V);
   }
 
   let node: HTMLInputElement;
@@ -73,11 +73,9 @@ export function field<V extends Value>(opts: FieldOptions<V>): Field<V> {
     node.addEventListener(event, fn);
     listeners.set(event, fn);
   }
-  function handleEvent(e: Event) {
-    const target = e.target as HTMLInputElement;
+  function handleEvent() {
     setDirty();
-    const v = target.files?.[0] ?? target.value;
-    value.set(v as V);
+    readValue();
   }
 
   return {
@@ -211,7 +209,12 @@ async function validateFormData<F extends Fields>(fields: F, data: FormData): Pr
   let anyError = false;
   const values = {} as any;
   const res = await Promise.all(Object.entries(fields).map(async ([key, field]) => {
-    const value = data.get(key);
+    const vv = data.getAll(key);
+    let value: any;
+    if (vv.length) {
+      if (vv[0] instanceof File) value = [...vv];
+      else value = vv[0];
+    }
     values[key] = value;
     return Promise.all(field.options.validators.map(validator => validator(value)));
   }));
@@ -224,12 +227,22 @@ async function validateFormData<F extends Fields>(fields: F, data: FormData): Pr
   return { errors, values, anyError };
 }
 
+function validationFail<F extends Fields>(validation: ServerValidationResult<F>) {
+  Object.entries(validation.values).forEach(([key, v]) => {
+    if (Array.isArray(v)) {
+      if (!v.length) delete validation.values[key];
+      else if (typeof v[0] !== 'string') delete validation.values[key];
+    }
+  });
+  return fail(400, validation as any);
+}
+
 export type Submit<F extends Fields> = (value: ServerValidationResult<F>) => void;
 export function validate<F extends Fields>(fields: F, submit: Submit<F>): KitAction {
   return async ({ request }) => {
     const data = await request.formData();
     const validation = await validateFormData(fields, data);
-    if (validation.anyError) return fail(400, validation as any);
+    if (validation.anyError) return validationFail(validation);
     await submit(validation);
     return { success: true };
   }

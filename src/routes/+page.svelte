@@ -9,7 +9,7 @@
   $: actionData(form);
 </script>
 <!-- TODO: prettify -->
-<form use:enhance={enhancer} method="POST">
+<form use:enhance={enhancer} method="POST" enctype="multipart/form-data">
   <label class:error={$name.error}>
     Name
     <input type="text" name="name" use:name.action value={$name.value}>
@@ -24,7 +24,7 @@
   </label>
   <label class:error={$picture.error}>
     Study
-    <input type="file" name="picture" use:picture.action>
+    <input type="file" name="picture" use:picture.action multiple>
   </label>
   <button class:error={$anyError}> Submit </button>
 </form>
